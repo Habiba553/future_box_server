@@ -147,11 +147,29 @@ app.get('/stats', async (req, res) => {
 
 
     // Add a new movie
-    app.post("/movies", async (req, res) => {
-      const newMovie = req.body;
-      const result = await movieCollection.insertOne(newMovie);
-      res.send(result);
-    });
+   // Add/replace POST /movies to ensure addedAt and numeric rating
+app.post("/movies", async (req, res) => {
+  try {
+    const newMovie = { ...req.body };
+
+    // Normalize rating to a Number if possible
+    if (newMovie.rating !== undefined && newMovie.rating !== null) {
+      const num = Number(newMovie.rating);
+      if (!Number.isNaN(num)) newMovie.rating = num;
+      else delete newMovie.rating; // remove invalid rating
+    }
+
+    // Ensure addedAt is a Date object (use Date() so Mongo stores as BSON Date)
+    if (!newMovie.addedAt) newMovie.addedAt = new Date();
+
+    const result = await movieCollection.insertOne(newMovie);
+    return res.status(201).json({ success: true, insertedId: result.insertedId, item: newMovie });
+  } catch (err) {
+    console.error("POST /movies error:", err);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
 
     // Update an existing movie
     app.put("/movies/:id", async (req, res) => {
@@ -343,8 +361,54 @@ app.get('/my-collection', async (req, res) => {
   }
 });
 
+// ===== ADD THESE ROUTES INSIDE run() AFTER movieCollection IS DEFINED =====
 
+// STATS route (safe — uses `users` collection if present)
+app.get('/stats', async (req, res) => {
+  try {
+    const totalMovies = await movieCollection.countDocuments();
+    const usersCollection = db.collection('users');
+    // if users collection doesn't exist this returns 0
+    const totalUsers = await usersCollection.countDocuments();
+    return res.json({ totalMovies, totalUsers });
+  } catch (err) {
+    console.error('GET /stats error:', err);
+    return res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
 
+// TOP RATED -> top 5 movies with numeric rating (desc)
+app.get('/top-rated', async (req, res) => {
+  try {
+    const limit = 5;
+    const results = await movieCollection
+      .find({ rating: { $type: 'number' } }) // ensure rating is numeric
+      .sort({ rating: -1, releaseYear: -1 })
+      .limit(limit)
+      .toArray();
+    return res.json(results);
+  } catch (err) {
+    console.error('GET /top-rated error:', err);
+    return res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// RECENTLY ADDED -> latest 6 movies by addedAt, fallback to _id timestamp
+app.get('/recently-added', async (req, res) => {
+  try {
+    const limit = 6;
+    // sort by addedAt desc, then by _id desc (ObjectId contains timestamp)
+    const results = await movieCollection
+      .find({})
+      .sort({ addedAt: -1, _id: -1 })
+      .limit(limit)
+      .toArray();
+    return res.json(results);
+  } catch (err) {
+    console.error('GET /recently-added error:', err);
+    return res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
 
 
     await client.db("admin").command({ ping: 1 });
