@@ -100,7 +100,6 @@ app.get("/movies", async (req, res) => {
         break;
       case "recent":
       default:
-        // if you keep a created/addedAt timestamp use that. Fallback to releaseYear desc.
         sortObj = { releaseYear: -1 };
     }
 
@@ -128,8 +127,6 @@ app.get("/movies", async (req, res) => {
       res.send(result);
     });
 
-// STATS ROUTE → returns totalMovies + totalUsers
-// robust /stats route - place this inside run() after movieCollection/db are defined
 app.get('/stats', async (req, res) => {
   try {
     // total movies (same as before)
@@ -158,7 +155,6 @@ app.get('/stats', async (req, res) => {
       }
     }
 
-    // fallback 2 (optional): you could also inspect other collections or fields here
 
     // return a clear, predictable shape
     const payload = { totalMovies, totalUsers };
@@ -172,8 +168,7 @@ app.get('/stats', async (req, res) => {
 
 
     // Add a new movie
-   // Add/replace POST /movies to ensure addedAt and numeric rating
-// POST /movies — normalized to your DB shape
+
 app.post("/movies", async (req, res) => {
   try {
     const movie = { ...req.body };
@@ -235,9 +230,6 @@ app.post("/movies", async (req, res) => {
 
 
     // Update an existing movie
-    // Update an existing movie (normalized + returning updated doc)
-
-    // --- REPLACE YOUR EXISTING app.put("/movies/:id") WITH THIS ---
 app.put("/movies/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -274,8 +266,6 @@ app.put("/movies/:id", async (req, res) => {
       return res.status(404).json({ success: false, error: "Movie not found" });
     }
 
-    // Explicitly send a 200 status with a success flag
-    // This prevents the "Movie not found" error on your frontend
     return res.status(200).json({ 
       success: true, 
       message: "Movie updated successfully",
@@ -407,11 +397,10 @@ app.delete("/watchlist/:id", async (req, res) => {
 // --- USER COLLECTION SETUP ---
 const usersCollection = db.collection('users');
 
-// POST /users -> Save registered user to MongoDB
 app.post('/users', async (req, res) => {
   try {
     const user = req.body;
-    // Check if user already exists to avoid duplicates
+
     const query = { email: user.email };
     const existingUser = await usersCollection.findOne(query);
 
@@ -451,8 +440,7 @@ app.post('/my-collection', async (req, res) => {
   }
 });
 
-// GET /my-collection?email=...  -> list user collection (used by frontend)
-// GET /my-collection?email=...&genres=Action,Drama&minRating=4&maxRating=9
+// GET /my-collection
 app.get('/my-collection', async (req, res) => {
   try {
     const email = req.query.email;
@@ -479,7 +467,6 @@ app.get('/my-collection', async (req, res) => {
         from: 'movies',
         let: { mId: '$movieId' },
         pipeline: [
-          // attempt to match by converting movieId string to ObjectId (works if movieId is a stringified ObjectId)
           {
             $match: {
               $expr: {
@@ -546,7 +533,7 @@ app.get('/my-collection', async (req, res) => {
 
 // ===== ADD THESE ROUTES INSIDE run() AFTER movieCollection IS DEFINED =====
 
-// STATS route (safe — uses `users` collection if present)
+
 app.get('/stats', async (req, res) => {
   try {
     const totalMovies = await movieCollection.countDocuments();
@@ -597,8 +584,7 @@ app.get('/recently-added', async (req, res) => {
     await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
   } finally {
-    // Ensures that the client will close when you finish/error
-    // await client.close();
+   
   }
 }
 run().catch(console.dir);
