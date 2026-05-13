@@ -591,7 +591,7 @@ run().catch(console.dir);
 
 
 app.get('/', (req, res) => {
-  res.send('Server is running well!')
+  res.send('Server is running properly!')
 })
 
 app.listen(port, () => {
