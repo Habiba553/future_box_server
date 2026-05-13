@@ -28,7 +28,6 @@ async function run() {
     const movieCollection = db.collection('movies')
 
         // Get all movies
-   // Replace the existing app.get("/movies", ...) with this implementation
 app.get("/movies", async (req, res) => {
   try {
     // parse query
