@@ -1,6 +1,6 @@
 const express = require('express')
 const cors = require("cors");
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient, ServerApiVersion,ObjectId } = require('mongodb');
 const app = express()
 const port = 3000
 app.use(cors())
@@ -130,40 +130,104 @@ app.get("/movies", async (req, res) => {
     });
 
 // STATS ROUTE → returns totalMovies + totalUsers
+// robust /stats route - place this inside run() after movieCollection/db are defined
 app.get('/stats', async (req, res) => {
   try {
+    // total movies (same as before)
     const totalMovies = await movieCollection.countDocuments();
 
-    // If you have a users collection
+    // attempt to count a 'users' collection if it exists
     const usersCollection = db.collection('users');
-    const totalUsers = await usersCollection.countDocuments();
+    let totalUsers = 0;
+    try {
+      totalUsers = await usersCollection.countDocuments();
+    } catch (e) {
+      console.warn('Could not count "users" collection directly:', e);
+      totalUsers = 0;
+    }
 
-    res.json({ totalMovies, totalUsers });
+    // fallback 1: if totalUsers === 0, try distinct count based on addedBy in movies
+    if (!totalUsers) {
+      try {
+        const distinctUsers = await movieCollection.distinct('addedBy', { addedBy: { $exists: true, $ne: null } });
+        if (Array.isArray(distinctUsers)) {
+          totalUsers = distinctUsers.length;
+          console.log('Fallback: counted distinct "addedBy" in movies:', totalUsers);
+        }
+      } catch (e) {
+        console.warn('Fallback distinct addedBy failed:', e);
+      }
+    }
+
+    // fallback 2 (optional): you could also inspect other collections or fields here
+
+    // return a clear, predictable shape
+    const payload = { totalMovies, totalUsers };
+    console.log('/stats payload ->', payload);
+    return res.json(payload);
   } catch (err) {
-    console.error("GET /stats error:", err);
-    res.status(500).json({ error: "Internal Server Error" });
+    console.error('GET /stats error:', err);
+    return res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
 
     // Add a new movie
    // Add/replace POST /movies to ensure addedAt and numeric rating
+// POST /movies — normalized to your DB shape
 app.post("/movies", async (req, res) => {
   try {
-    const newMovie = { ...req.body };
+    const movie = { ...req.body };
 
-    // Normalize rating to a Number if possible
-    if (newMovie.rating !== undefined && newMovie.rating !== null) {
-      const num = Number(newMovie.rating);
-      if (!Number.isNaN(num)) newMovie.rating = num;
-      else delete newMovie.rating; // remove invalid rating
+    // Map legacy created_by -> addedBy
+    if (movie.created_by && !movie.addedBy) {
+      movie.addedBy = movie.created_by;
+      delete movie.created_by;
     }
 
-    // Ensure addedAt is a Date object (use Date() so Mongo stores as BSON Date)
-    if (!newMovie.addedAt) newMovie.addedAt = new Date();
+    // Map poster -> posterUrl (frontend might send 'poster' or 'posterUrl')
+    if (movie.poster && !movie.posterUrl) {
+      movie.posterUrl = movie.poster;
+      delete movie.poster;
+    }
 
-    const result = await movieCollection.insertOne(newMovie);
-    return res.status(201).json({ success: true, insertedId: result.insertedId, item: newMovie });
+    // Normalize numeric fields
+    if (movie.rating !== undefined && movie.rating !== null && movie.rating !== "") {
+      const r = Number(movie.rating);
+      if (!Number.isNaN(r)) movie.rating = r;
+      else delete movie.rating;
+    }
+
+    if (movie.releaseYear !== undefined && movie.releaseYear !== null && movie.releaseYear !== "") {
+      const y = Number(movie.releaseYear);
+      if (!Number.isNaN(y)) movie.releaseYear = y;
+      else delete movie.releaseYear;
+    }
+
+    if (movie.duration !== undefined && movie.duration !== null && movie.duration !== "") {
+      const d = Number(movie.duration);
+      if (!Number.isNaN(d)) movie.duration = d;
+      else delete movie.duration;
+    }
+
+    // Keep cast as a comma-separated string (your DB sample uses a string)
+    if (Array.isArray(movie.cast)) {
+      movie.cast = movie.cast.join(", ");
+    } else if (typeof movie.cast === "string") {
+      movie.cast = movie.cast.trim();
+    }
+
+    // Ensure addedAt is a BSON Date on the server for sorting/filtering
+    if (movie.addedAt) {
+      const dt = new Date(movie.addedAt);
+      if (!Number.isNaN(dt.getTime())) movie.addedAt = dt;
+      else movie.addedAt = new Date();
+    } else {
+      movie.addedAt = new Date();
+    }
+
+    const result = await movieCollection.insertOne(movie);
+    return res.status(201).json({ success: true, insertedId: result.insertedId, item: movie });
   } catch (err) {
     console.error("POST /movies error:", err);
     return res.status(500).json({ error: "Internal Server Error" });
@@ -172,16 +236,61 @@ app.post("/movies", async (req, res) => {
 
 
     // Update an existing movie
-    app.put("/movies/:id", async (req, res) => {
-      const { ObjectId } = require("mongodb");
-      const { id } = req.params;
-      const updatedData = req.body;
-      const filter = { _id: new ObjectId(id) };
-      const update = { $set: updatedData };
-      const result = await movieCollection.updateOne(filter, update);
-      res.send(result);
+    // Update an existing movie (normalized + returning updated doc)
+
+    // --- REPLACE YOUR EXISTING app.put("/movies/:id") WITH THIS ---
+app.put("/movies/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ error: "id required" });
+
+    const incoming = { ...req.body };
+
+    // 1. Normalize Poster
+    if (incoming.poster && !incoming.posterUrl) {
+      incoming.posterUrl = incoming.poster;
+      delete incoming.poster;
+    }
+
+    // 2. Normalize Numbers
+    if (incoming.rating !== undefined && incoming.rating !== null && incoming.rating !== "") {
+      incoming.rating = Number(incoming.rating);
+    }
+    if (incoming.releaseYear !== undefined && incoming.releaseYear !== null && incoming.releaseYear !== "") {
+      incoming.releaseYear = Number(incoming.releaseYear);
+    }
+
+    // 3. Normalize Cast (Save as string to match your POST logic)
+    if (Array.isArray(incoming.cast)) {
+      incoming.cast = incoming.cast.join(", ");
+    }
+
+    const filter = { _id: new ObjectId(id) };
+    const updateDoc = { $set: incoming };
+
+    // Use updateOne for reliability
+    const result = await movieCollection.updateOne(filter, updateDoc);
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ success: false, error: "Movie not found" });
+    }
+
+    // Explicitly send a 200 status with a success flag
+    // This prevents the "Movie not found" error on your frontend
+    return res.status(200).json({ 
+      success: true, 
+      message: "Movie updated successfully",
+      modifiedCount: result.modifiedCount 
     });
 
+  } catch (err) {
+    console.error("PUT /movies/:id error:", err);
+    if (err?.name === "BSONTypeError" || /ObjectId/.test(err.message)) {
+      return res.status(400).json({ error: "Invalid ID format" });
+    }
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
     // Delete a movie
     app.delete("/movies/:id", async (req, res) => {
       const { ObjectId } = require("mongodb");
@@ -218,6 +327,58 @@ app.delete('/my-collection/:id', async (req, res) => {
   }
 });
 
+// --- EMERGENCY DEBUG START ---
+const watchlistCollection = db.collection('watchlist');
+
+// This is a test route. If this works, the 404 is gone.
+app.get("/test-route", (req, res) => {
+    res.send("Server is recognizing new routes!");
+});
+
+app.post("/watchlist", async (req, res) => {
+    try {
+        const item = req.body;
+        const result = await watchlistCollection.insertOne(item);
+        res.status(201).json(result);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get("/watchlist", async (req, res) => {
+    try {
+        const email = req.query.email;
+        const result = await watchlistCollection.find({ userEmail: email }).toArray();
+        res.send(result);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.delete("/watchlist/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    
+    // Check if the ID is valid before trying to use it
+    if (!ObjectId.isValid(id)) {
+        return res.status(400).send({ error: "Invalid ID format" });
+    }
+
+    const query = { _id: new ObjectId(id) };
+    const result = await watchlistCollection.deleteOne(query);
+    
+    if (result.deletedCount === 1) {
+        res.send({ success: true, message: "Deleted successfully" });
+    } else {
+        res.status(404).send({ success: false, message: "Movie not found in watchlist" });
+    }
+  } catch (err) {
+    console.error("DELETE ERROR:", err);
+    res.status(500).send({ error: "Internal server error" });
+  }
+});
+
+// --- EMERGENCY DEBUG END ---
     // Get latest 6 movies
     app.get("/latest-movies", async (req, res) => {
       const result = await movieCollection.find().sort({ releaseYear: -1 }).limit(6).toArray();
@@ -243,6 +404,29 @@ app.delete('/my-collection/:id', async (req, res) => {
       }).toArray();
       res.send(result);
     });
+
+// --- USER COLLECTION SETUP ---
+const usersCollection = db.collection('users');
+
+// POST /users -> Save registered user to MongoDB
+app.post('/users', async (req, res) => {
+  try {
+    const user = req.body;
+    // Check if user already exists to avoid duplicates
+    const query = { email: user.email };
+    const existingUser = await usersCollection.findOne(query);
+
+    if (existingUser) {
+      return res.send({ message: 'User already exists', insertedId: null });
+    }
+
+    const result = await usersCollection.insertOne(user);
+    res.status(201).send(result);
+  } catch (err) {
+    console.error("POST /users error:", err);
+    res.status(500).send({ error: "Failed to save user" });
+  }
+});
 
     // inside run() after movieCollection is defined
 
@@ -419,7 +603,6 @@ app.get('/recently-added', async (req, res) => {
   }
 }
 run().catch(console.dir);
-
 
 
 app.get('/', (req, res) => {
