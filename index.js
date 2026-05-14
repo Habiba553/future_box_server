@@ -17,11 +17,11 @@ const client = new MongoClient(uri, {
     deprecationErrors: true,
   }
 });
-
+client.connect();
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
-    await client.connect();
+    
     // Send a ping to confirm a successful connection
   
     const db = client.db('movie-master')
@@ -44,7 +44,7 @@ app.get("/movies", async (req, res) => {
     } = req.query;
 
     const page = Math.max(1, parseInt(pageQ, 10) || 1);
-    const limit = Math.max(1, Math.min(100, parseInt(limitQ, 10) || 24));
+    const limit = 10;
     const skip = (page - 1) * limit;
 
     // build filter
@@ -127,45 +127,33 @@ app.get("/movies", async (req, res) => {
       res.send(result);
     });
 
-app.get('/stats', async (req, res) => {
-  try {
-    // total movies (same as before)
-    const totalMovies = await movieCollection.countDocuments();
-
-    // attempt to count a 'users' collection if it exists
-    const usersCollection = db.collection('users');
-    let totalUsers = 0;
-    try {
-      totalUsers = await usersCollection.countDocuments();
-    } catch (e) {
-      console.warn('Could not count "users" collection directly:', e);
-      totalUsers = 0;
-    }
-
-    // fallback 1: if totalUsers === 0, try distinct count based on addedBy in movies
-    if (!totalUsers) {
+    app.get('/stats', async (req, res) => {
       try {
-        const distinctUsers = await movieCollection.distinct('addedBy', { addedBy: { $exists: true, $ne: null } });
-        if (Array.isArray(distinctUsers)) {
+        // Count movies
+        const totalMovies = await movieCollection.countDocuments();
+    
+        // Users collection
+        const usersCollection = db.collection('users');
+    
+        // Registered users count
+        let totalUsers = await usersCollection.countDocuments();
+    
+        // Fallback if users collection empty
+        if (totalUsers === 0) {
+          const distinctUsers = await movieCollection.distinct('addedBy', {
+            addedBy: { $exists: true, $ne: null }
+          });
+    
           totalUsers = distinctUsers.length;
-          console.log('Fallback: counted distinct "addedBy" in movies:', totalUsers);
         }
-      } catch (e) {
-        console.warn('Fallback distinct addedBy failed:', e);
+    
+        res.json({ totalMovies, totalUsers });
+    
+      } catch (err) {
+        console.error('GET /stats error:', err);
+        res.status(500).json({ error: 'Internal Server Error' });
       }
-    }
-
-
-    // return a clear, predictable shape
-    const payload = { totalMovies, totalUsers };
-    console.log('/stats payload ->', payload);
-    return res.json(payload);
-  } catch (err) {
-    console.error('GET /stats error:', err);
-    return res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
-
+    });
 
     // Add a new movie
 
@@ -534,19 +522,6 @@ app.get('/my-collection', async (req, res) => {
 // ===== ADD THESE ROUTES INSIDE run() AFTER movieCollection IS DEFINED =====
 
 
-app.get('/stats', async (req, res) => {
-  try {
-    const totalMovies = await movieCollection.countDocuments();
-    const usersCollection = db.collection('users');
-    // if users collection doesn't exist this returns 0
-    const totalUsers = await usersCollection.countDocuments();
-    return res.json({ totalMovies, totalUsers });
-  } catch (err) {
-    console.error('GET /stats error:', err);
-    return res.status(500).json({ error: 'Internal Server Error' });
-  }
-});
-
 // TOP RATED -> top 5 movies with numeric rating (desc)
 app.get('/top-rated', async (req, res) => {
   try {
@@ -581,7 +556,7 @@ app.get('/recently-added', async (req, res) => {
 });
 
 
-    await client.db("admin").command({ ping: 1 });
+    // await client.db("admin").command({ ping: 1 });
     console.log("Pinged your deployment. Successfully connected to MongoDB!");
   } finally {
    
