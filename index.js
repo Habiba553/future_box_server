@@ -17,11 +17,11 @@ const client = new MongoClient(uri, {
     deprecationErrors: true,
   }
 });
-client.connect();
+
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
-    
+    await client.connect();
     // Send a ping to confirm a successful connection
   
     const db = client.db('movie-master')
@@ -44,7 +44,7 @@ app.get("/movies", async (req, res) => {
     } = req.query;
 
     const page = Math.max(1, parseInt(pageQ, 10) || 1);
-    const limit = 10;
+    const limit = Math.max(1, Math.min(100, parseInt(limitQ, 10) || 24));
     const skip = (page - 1) * limit;
 
     // build filter
@@ -117,7 +117,6 @@ app.get("/movies", async (req, res) => {
     return res.status(500).json({ error: "Internal Server Error" });
   }
 });
-
 
     // Get a single movie by ID
     app.get("/movies/:id", async (req, res) => {
@@ -569,6 +568,5 @@ app.get('/', (req, res) => {
   res.send('Server is running properly!')
 })
 
-app.listen(port, () => {
-  console.log(`Server is  listening and working properly on port ${port}`)
-})
+module.exports = app;
+
